@@ -1,114 +1,186 @@
-
-import 'dart:math' as math;
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 class TransformController extends GetxController {
   // Camera orbit (syncs from WebView native interaction)
-  final RxDouble theta  = 30.0.obs;   // Horizontal (azimuth) degrees
-  final RxDouble phi    = 75.0.obs;   // Vertical (from top) degrees
-  final RxDouble radius = 80.0.obs;   // Distance/zoom
+  final RxDouble theta = 30.0.obs; // Horizontal (azimuth) degrees
+  final RxDouble phi = 75.0.obs; // Vertical (from top) degrees
+  final RxDouble radius = 0.50.obs; // Distance/zoom
 
   // Pan (camera target offset)
   final RxDouble targetX = 0.0.obs;
   final RxDouble targetY = 0.0.obs;
   final RxDouble targetZ = 0.0.obs;
 
-  WebViewController? _webView;
+  // Loading state for ModelViewer
+  final RxBool isModelLoaded = false.obs;
 
-  void setWebView(WebViewController wv) {
-    _webView = wv;
+  // Lock state
+  final RxBool isLocked = false.obs;
 
-    // Add JavaScript Channel to listen to model-viewer camera-change events
-    _webView!.addJavaScriptChannel(
-      'CameraSync',
-      onMessageReceived: (JavaScriptMessage message) {
-        _parseCameraState(message.message);
-      },
-    );
+  // ── Gizmo / Edit-mode state ─────────────────────────────────────────────
+  final RxBool isEditMode = false.obs;
+  final RxString gizmoMode = 'rotate'.obs; // 'translate' or 'rotate'
 
-    // Inject JS to emit camera state on every change
-    Future.delayed(const Duration(milliseconds: 500), () {
-      _webView!.runJavaScript('''
-        (function() {
-          var mv = document.querySelector('model-viewer');
-          if (!mv) return;
-          
-          function emitState() {
-            var orbit = mv.getCameraOrbit();
-            var target = mv.getCameraTarget();
-            // Emit as: theta,phi,radius|x,y,z
-            var msg = orbit.theta + ',' + orbit.phi + ',' + orbit.radius + '|' + target.x + ',' + target.y + ',' + target.z;
-            CameraSync.postMessage(msg);
-          }
+  // Model object rotation (pitch=X, yaw=Y, roll=Z) in degrees
+  final RxDouble modelX = 0.0.obs;
+  final RxDouble modelY = 0.0.obs;
+  final RxDouble modelZ = 0.0.obs;
 
-          mv.addEventListener('camera-change', emitState);
-          
-          // Initial emit
-          emitState();
-        })();
-      ''');
-    });
+  // Camera-orbit aliases (for the HUD)
+  double get rotationX => phi.value;
+  double get rotationY => theta.value;
+
+  void toggleLock() {
+    isLocked.value = !isLocked.value;
+    _webView?.runJavaScript("window.setLocked(${isLocked.value});");
   }
 
-  void _parseCameraState(String message) {
-    try {
-      final parts = message.split('|');
-      final orbitParts = parts[0].split(',');
-      final targetParts = parts[1].split(',');
-
-      // getCameraOrbit returns radians for angle, and meters for radius.
-      final double rawTheta = double.parse(orbitParts[0]);
-      final double rawPhi = double.parse(orbitParts[1]);
-      final double rawRadius = double.parse(orbitParts[2]);
-
-      // getCameraTarget
-      final double rawX = double.parse(targetParts[0]);
-      final double rawY = double.parse(targetParts[1]);
-      final double rawZ = double.parse(targetParts[2]);
-
-      // Convert radians to degrees for our HUD and Gizmo
-      double tDeg = rawTheta * 180.0 / math.pi;
-      double pDeg = rawPhi * 180.0 / math.pi;
-
-      // Keep theta bounded nicely between 0 and 360 for UI display
-      tDeg = tDeg % 360.0;
-      if (tDeg < 0) tDeg += 360.0;
-
-      theta.value = tDeg;
-      phi.value = pDeg;
-      radius.value = rawRadius; // Or map to percentage if preferred, but raw is fine
-
-      targetX.value = rawX;
-      targetY.value = rawY;
-      targetZ.value = rawZ;
-    } catch (e) {
-      debugPrint("Camera state parse error: \$e");
-    }
+  void toggleEditMode() {
+    isEditMode.value = !isEditMode.value;
+    _webView?.runJavaScript("window.setEditMode(${isEditMode.value});");
   }
 
-  // ── Preset views (using JS to gently animate to position) ─────────────────
-  void _setCamera(double newThetaDeg, double newPhiDeg, String target) {
+  /// Push updated model orientation into model-viewer via JS.
+  void applyModelRotation() {
     if (_webView == null) return;
-    // Use the JS property API (not setAttribute) — works with native cameraControls
-    final js = '''
+    final x = modelX.value;
+    final y = modelY.value;
+    final z = modelZ.value;
+    _webView!.runJavaScript('''
       (function(){
         var mv = document.querySelector('model-viewer');
         if (!mv) return;
-        mv.cameraOrbit = '${newThetaDeg}deg ${newPhiDeg}deg 100%';
-        mv.cameraTarget = '$target';
-        mv.jumpCameraToGoal();
+        mv.orientation = '${x}deg ${y}deg ${z}deg';
       })();
-    ''';
-    _webView!.runJavaScript(js);
+    ''');
   }
 
-  void viewFront()  { _setCamera(0,   90, 'auto auto auto'); }
-  void viewBack()   { _setCamera(180, 90, 'auto auto auto'); }
-  void viewTop()    { _setCamera(0,   1,  'auto auto auto'); }
-  void viewRight()  { _setCamera(90,  90, 'auto auto auto'); }
-  void viewLeft()   { _setCamera(-90, 90, 'auto auto auto'); }
+  late final WebViewController controller;
+  WebViewController? _webView;
 
-  void resetView()  { _setCamera(30, 75, 'auto auto auto'); }
+  @override
+  void onInit() {
+    super.onInit();
+    controller = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(const Color(0x00000000))
+      ..addJavaScriptChannel(
+        'ThreeJSChannel',
+        onMessageReceived: (JavaScriptMessage message) {
+          _parseThreeJSState(message.message);
+        },
+      )
+      ..setNavigationDelegate(
+        NavigationDelegate(
+          onPageFinished: (url) {
+            _initializeModel();
+          },
+        ),
+      );
+
+    _loadStaticHtml();
+    _webView = controller;
+  }
+
+  Future<void> _loadStaticHtml() async {
+    try {
+      final html = await rootBundle.loadString('assets/www/index.html');
+      // Use a consistent baseUrl to allow CORS for scripts to resolve
+      controller.loadHtmlString(html, baseUrl: 'https://appassets.android.com/assets/www/');
+    } catch (e) {
+      debugPrint("HTML Load error: $e");
+    }
+  }
+
+  Future<void> _initializeModel() async {
+    try {
+      final String assetPath = 'assets/maxillary_lateral_incisor_angled.glb';
+      debugPrint("THREE_JS_BRIDGE: Injecting GLB via Base64: $assetPath");
+      
+      final ByteData data = await rootBundle.load(assetPath);
+      final List<int> bytes = data.buffer.asUint8List();
+      final String base64Model = base64Encode(bytes);
+
+      _webView?.runJavaScript("window.loadModelBase64('$base64Model');");
+    } catch (e) {
+      debugPrint("Model injection error: $e");
+    }
+  }
+
+  void _parseThreeJSState(String jsonString) {
+    try {
+      final Map<String, dynamic> data = json.decode(jsonString);
+      final String type = data['type'] ?? 'sync';
+
+      if (type == 'ready') {
+        debugPrint("THREE_JS_LOG: JavaScript Environment Ready");
+        // We set isModelLoaded to true as soon as the JS ENGINE is alive
+        // (The model itself might follow locally via Base64 injection)
+        isModelLoaded.value = true; 
+        return;
+      }
+
+      if (type == 'loaded') {
+        debugPrint("THREE_JS_LOG: Model fully loaded into scene: ${data['message']}");
+        return;
+      }
+
+      if (type == 'debug') {
+        debugPrint("THREE_JS_LOG: ${data['message']}");
+        return;
+      }
+
+      // Sync data...
+      modelX.value = (data['rx'] as num).toDouble();
+      modelY.value = (data['ry'] as num).toDouble();
+      modelZ.value = (data['rz'] as num).toDouble();
+
+      radius.value = (data['zoom'] as num).toDouble();
+
+      targetX.value = (data['targetX'] as num).toDouble();
+      targetY.value = (data['targetY'] as num).toDouble();
+      targetZ.value = (data['targetZ'] as num).toDouble();
+    } catch (e) {
+      debugPrint("ThreeJS state parse error: $e. Raw: $jsonString");
+    }
+  }
+
+  void setGizmoMode(String mode) {
+    gizmoMode.value = mode;
+    _webView?.runJavaScript("window.setGizmoMode('$mode');");
+  }
+
+  void setCameraOrbit(double theta, double phi, double distance) {
+    _webView?.runJavaScript("window.setCameraOrbit($theta, $phi, $distance);");
+  }
+
+  void viewFront() {
+    setCameraOrbit(0, 90, radius.value);
+  }
+
+  void viewTop() {
+    setCameraOrbit(0, 0, radius.value);
+  }
+
+  void viewRight() {
+    setCameraOrbit(90, 90, radius.value);
+  }
+
+  void viewLeft() {
+    setCameraOrbit(-90, 90, radius.value);
+  }
+
+  void resetView() {
+    _webView?.runJavaScript("window.resetView();");
+    theta.value = 0;
+    phi.value = 90;
+    radius.value = 8.0; // Standard reset distance
+    modelX.value = 0;
+    modelY.value = 0;
+    modelZ.value = 0;
+  }
 }

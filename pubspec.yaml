@@ -39,6 +39,7 @@ dependencies:
   webview_flutter: ^4.10.0
   vector_math: ^2.1.4
   get: ^4.7.3
+  lottie: ^3.2.0
 
 dev_dependencies:
   flutter_test:
@@ -64,7 +65,9 @@ flutter:
 
   # To add assets to your application, add an assets section, like this:
   assets:
-    - assets/Maxillary_Lateral_Incisor_rugved.glb
+    - assets/maxillary_lateral_incisor_angled.glb
+    - assets/tooth_loader.json
+    - assets/www/
   #   - images/a_dot_ham.jpeg
 
   # An image asset can refer to one or more resolution-specific "variants", see

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-import 'ui/main_screen.dart';
+import 'ui/tooth_list_screen.dart';
 
 void main() {
   runApp(const ToothApp());
@@ -21,7 +21,7 @@ class ToothApp extends StatelessWidget {
           secondary: Colors.greenAccent,
         ),
       ),
-      home: const MainScreen(),
+      home: const ToothListScreen(),
     );
   }
 }
