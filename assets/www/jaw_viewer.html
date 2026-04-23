@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>3D Jaw Simulator</title>
+    <style>
+        body { margin: 0; background: radial-gradient(circle, #2c3e50, #000000); overflow: hidden; font-family: sans-serif; }
+        #canvas-container { width: 100vw; height: 100vh; }
+        #loader {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: #4499FF; font-weight: bold; letter-spacing: 2px;
+        }
+    </style>
+</head>
+<body>
+    <div id="loader">INITIALIZING ENGINE...</div>
+    <div id="canvas-container"></div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        let raycaster = new THREE.Raycaster();
+        let pointer = new THREE.Vector2();
+        let markers = [];
+
+        function init() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 150, 200);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.toneMapping = THREE.ReinhardToneMapping;
+            renderer.shadowMap.enabled = true;
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.minDistance = 50;
+            controls.maxDistance = 500;
+            controls.target.set(0, 0, 0);
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+            scene.add(ambientLight);
+
+            const mainLight = new THREE.DirectionalLight(0xffffff, 1.2);
+            mainLight.position.set(50, 100, 50);
+            mainLight.castShadow = true;
+            scene.add(mainLight);
+
+            const fillLight = new THREE.RectAreaLight(0x4499FF, 2, 200, 200);
+            fillLight.position.set(-100, 50, -50);
+            fillLight.lookAt(0, 0, 0);
+            scene.add(fillLight);
+
+            createProceduralJaw();
+            calculateTeethPositions();
+            
+            window.addEventListener('mousedown', onPointerDown);
+            window.addEventListener('touchstart', onTouchStart);
+
+            document.getElementById('loader').style.display = 'none';
+            animate();
+        }
+
+        function createProceduralJaw() {
+            // Create a "U" shaped lower jaw gum
+            const path = new THREE.CatmullRomCurve3([
+                new THREE.Vector3(80, 0, -60),
+                new THREE.Vector3(75, 0, 20),
+                new THREE.Vector3(0, 0, 80),
+                new THREE.Vector3(-75, 0, 20),
+                new THREE.Vector3(-80, 0, -60),
+            ]);
+
+            const tubeGeo = new THREE.TubeGeometry(path, 64, 15, 12, false);
+            const tubeMat = new THREE.MeshStandardMaterial({ 
+                color: 0xcc6677, 
+                roughness: 0.3, 
+                metalness: 0.1,
+                emissive: 0x331111,
+                emissiveIntensity: 0.2
+            });
+            
+            jaw = new THREE.Mesh(tubeGeo, tubeMat);
+            jaw.receiveShadow = true;
+            jaw.rotation.x = Math.PI / 2;
+            scene.add(jaw);
+        }
+
+        function calculateTeethPositions() {
+            const path = new THREE.CatmullRomCurve3([
+                new THREE.Vector3(75, 5, -55),
+                new THREE.Vector3(70, 5, 20),
+                new THREE.Vector3(0, 5, 75),
+                new THREE.Vector3(-70, 5, 20),
+                new THREE.Vector3(-75, 5, -55),
+            ]);
+
+            const points = path.getPoints(15);
+            teethPositions = points;
+
+            points.forEach((p, i) => {
+                const markerGeo = new THREE.CylinderGeometry(4, 4, 2, 16);
+                const markerMat = new THREE.MeshStandardMaterial({ 
+                    color: 0x4499FF, 
+                    transparent: true, 
+                    opacity: 0.4,
+                    emissive: 0x4499FF,
+                    emissiveIntensity: 0.5
+                });
+                const marker = new THREE.Mesh(markerGeo, markerMat);
+                marker.position.copy(p);
+                marker.userData = { index: i };
+                scene.add(marker);
+                markers.push(marker);
+            });
+        }
+
+        function onPointerDown(event) {
+            pointer.x = (event.clientX / window.innerWidth) * 2 - 1;
+            pointer.y = -(event.clientY / window.innerHeight) * 2 + 1;
+            checkIntersection();
+        }
+
+        function onTouchStart(event) {
+            if (event.touches.length > 0) {
+                pointer.x = (event.touches[0].clientX / window.innerWidth) * 2 - 1;
+                pointer.y = -(event.touches[0].clientY / window.innerHeight) * 2 + 1;
+                checkIntersection();
+            }
+        }
+
+        function checkIntersection() {
+            raycaster.setFromCamera(pointer, camera);
+            const intersects = raycaster.intersectObjects(markers);
+            if (intersects.length > 0) {
+                const marker = intersects[0].object;
+                // Position number (17-32) from index (0-15)
+                // idx 0 -> 32, idx 15 -> 17
+                const targetPosNumber = 32 - marker.userData.index;
+                
+                // Notify Flutter
+                if (window.Toaster) { 
+                    window.Toaster.postMessage(JSON.stringify({ type: 'MARKER_TAP', position: targetPosNumber })); 
+                }
+            }
+        }
+
+        let modelData = null;
+
+        window.loadModel = function(base64) {
+            modelData = base64;
+        };
+
+        window.handleFlutterMessage = function(msg) {
+            if (msg.type === 'PLACE_TOOTH') {
+                placeTooth(msg.toothId, msg.position);
+            } else if (msg.type === 'ROTATE_TOOTH') {
+                rotateActive(msg.angle);
+            } else if (msg.type === 'SET_LOCK') {
+                controls.enabled = !msg.value;
+            }
+        };
+
+        function placeTooth(id, posIndex) {
+            // posIndex is 1-indexed for the 16 lower teeth (17-32)
+            // Mapping: 32 -> 1, 17 -> 16
+            const idx = 32 - id; 
+            const targetPos = teethPositions[idx];
+
+            if (placedTeeth[id]) {
+                const mesh = placedTeeth[id];
+                gsap.to(mesh.position, { x: targetPos.x, y: targetPos.y, z: targetPos.z, duration: 1 });
+                activeTooth = mesh;
+                return;
+            }
+
+            // Load new tooth
+            if (!modelData) return;
+            
+            const loader = new GLTFLoader();
+            loader.parse(atob(modelData).split('').map(c => c.charCodeAt(0)).buffer, '', (gltf) => {
+                const mesh = gltf.scene;
+                mesh.scale.set(15, 15, 15);
+                mesh.position.set(0, 100, 0); // Start from top
+                scene.add(mesh);
+                
+                // Animation to place
+                new TWEEN.Tween(mesh.position)
+                    .to({ x: targetPos.x, y: targetPos.y, z: targetPos.z }, 800)
+                    .easing(TWEEN.Easing.Quadratic.Out)
+                    .start();
+                
+                placedTeeth[id] = mesh;
+                activeTooth = mesh;
+            });
+        }
+
+        function rotateActive(angle) {
+            if (activeTooth) {
+                activeTooth.rotation.y = angle * (Math.PI / 180);
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            TWEEN.update();
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        init();
+    </script>
+    
+    <!-- External libs via CDN for robust animations -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tween.js/23.1.1/tween.umd.js"></script>
+</body>
+</html>
