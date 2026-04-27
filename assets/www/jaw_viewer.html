@@ -31,6 +31,11 @@
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
+        let scene, camera, renderer, controls, jaw;
+        let teethPositions = [];
+        let placedTeeth = {}; // Store placed tooth meshes
+        let activeTooth = null;
+
         let raycaster = new THREE.Raycaster();
         let pointer = new THREE.Vector2();
         let markers = [];
@@ -54,7 +59,7 @@
             controls.target.set(0, 0, 0);
 
             // Lighting
-            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
             scene.add(ambientLight);
 
             const mainLight = new THREE.DirectionalLight(0xffffff, 1.2);
@@ -151,7 +156,6 @@
             if (intersects.length > 0) {
                 const marker = intersects[0].object;
                 // Position number (17-32) from index (0-15)
-                // idx 0 -> 32, idx 15 -> 17
                 const targetPosNumber = 32 - marker.userData.index;
                 
                 // Notify Flutter
@@ -161,46 +165,42 @@
             }
         }
 
-        let modelData = null;
-
-        window.loadModel = function(base64) {
-            modelData = base64;
-        };
-
-        window.handleFlutterMessage = function(msg) {
-            if (msg.type === 'PLACE_TOOTH') {
-                placeTooth(msg.toothId, msg.position);
-            } else if (msg.type === 'ROTATE_TOOTH') {
-                rotateActive(msg.angle);
-            } else if (msg.type === 'SET_LOCK') {
-                controls.enabled = !msg.value;
-            }
-        };
-
-        function placeTooth(id, posIndex) {
-            // posIndex is 1-indexed for the 16 lower teeth (17-32)
-            // Mapping: 32 -> 1, 17 -> 16
+        window.loadToothModel = function(id, base64) {
             const idx = 32 - id; 
             const targetPos = teethPositions[idx];
 
             if (placedTeeth[id]) {
                 const mesh = placedTeeth[id];
-                gsap.to(mesh.position, { x: targetPos.x, y: targetPos.y, z: targetPos.z, duration: 1 });
+                new TWEEN.Tween(mesh.position)
+                    .to({ x: targetPos.x, y: targetPos.y, z: targetPos.z }, 800)
+                    .easing(TWEEN.Easing.Quadratic.Out)
+                    .start();
                 activeTooth = mesh;
                 return;
             }
 
-            // Load new tooth
-            if (!modelData) return;
-            
             const loader = new GLTFLoader();
-            loader.parse(atob(modelData).split('').map(c => c.charCodeAt(0)).buffer, '', (gltf) => {
+            const binaryString = atob(base64);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+
+            loader.parse(bytes.buffer, '', (gltf) => {
                 const mesh = gltf.scene;
-                mesh.scale.set(15, 15, 15);
+                
+                mesh.traverse((child) => {
+                    if (child.isMesh) {
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                    }
+                });
+
+                // Scale for GLB might be different, but user says they are perfect now
+                mesh.scale.set(15, 15, 15); 
                 mesh.position.set(0, 100, 0); // Start from top
                 scene.add(mesh);
                 
-                // Animation to place
                 new TWEEN.Tween(mesh.position)
                     .to({ x: targetPos.x, y: targetPos.y, z: targetPos.z }, 800)
                     .easing(TWEEN.Easing.Quadratic.Out)
@@ -209,7 +209,27 @@
                 placedTeeth[id] = mesh;
                 activeTooth = mesh;
             });
-        }
+        };
+
+        window.handleFlutterMessage = function(msgInput) {
+            let msg = msgInput;
+            if (typeof msgInput === 'string') {
+                try {
+                    msg = JSON.parse(msgInput);
+                } catch(e) {
+                    console.error("Error parsing message", e);
+                    return;
+                }
+            }
+            
+            if (msg.type === 'ROTATE_TOOTH') {
+                rotateActive(msg.angle);
+            } else if (msg.type === 'SET_LOCK') {
+                controls.enabled = !msg.value;
+            } else if (msg.type === 'PLACE_TOOTH') {
+                // We handle placement logic here if needed, but loadToothModel is usually called first
+            }
+        };
 
         function rotateActive(angle) {
             if (activeTooth) {

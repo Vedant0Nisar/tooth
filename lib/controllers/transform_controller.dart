@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import '../models/tooth_model.dart';
 
 class TransformController extends GetxController {
   // Camera orbit (syncs from WebView native interaction)
@@ -17,6 +18,9 @@ class TransformController extends GetxController {
 
   // Loading state for ModelViewer
   final RxBool isModelLoaded = false.obs;
+
+  // Selected Tooth
+  final Rxn<ToothModel> selectedTooth = Rxn<ToothModel>();
 
   // Lock state
   final RxBool isLocked = false.obs;
@@ -98,7 +102,13 @@ class TransformController extends GetxController {
 
   Future<void> _initializeModel() async {
     try {
-      final String assetPath = 'assets/maxillary_lateral_incisor_angled.glb';
+      final tooth = selectedTooth.value;
+      if (tooth == null) {
+        debugPrint("THREE_JS_BRIDGE: No tooth selected, waiting...");
+        return;
+      }
+      
+      final String assetPath = tooth.objPath;
       debugPrint("THREE_JS_BRIDGE: Injecting GLB via Base64: $assetPath");
       
       final ByteData data = await rootBundle.load(assetPath);
@@ -108,6 +118,14 @@ class TransformController extends GetxController {
       _webView?.runJavaScript("window.loadModelBase64('$base64Model');");
     } catch (e) {
       debugPrint("Model injection error: $e");
+    }
+  }
+
+  void setSelectedTooth(ToothModel tooth) {
+    selectedTooth.value = tooth;
+    resetView(); // Ensure consistent starting view for every tooth
+    if (isModelLoaded.value) {
+      _initializeModel();
     }
   }
 

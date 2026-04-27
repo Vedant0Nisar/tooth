@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:lottie/lottie.dart';
 import '../controllers/tooth_list_controller.dart';
+import '../controllers/transform_controller.dart';
 import '../models/tooth_model.dart';
 import 'main_screen.dart';
 
@@ -194,6 +195,10 @@ class ToothListScreen extends StatelessWidget {
           splashColor: accentColor.withOpacity(0.2),
           highlightColor: accentColor.withOpacity(0.1),
           onTap: () {
+            // Set the selected tooth in the TransformController
+            final transformCtrl = Get.put(TransformController());
+            transformCtrl.setSelectedTooth(tooth);
+            
             // Navigate to main screen showing the 3D model
             Get.to(() => const MainScreen(), transition: Transition.zoom);
           },

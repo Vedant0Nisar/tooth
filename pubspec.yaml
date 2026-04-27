@@ -65,9 +65,12 @@ flutter:
 
   # To add assets to your application, add an assets section, like this:
   assets:
-    - assets/maxillary_lateral_incisor_angled.glb
-    - assets/tooth_loader.json
+    - assets/
+    - assets/tooth_single_32/
     - assets/www/
+    - assets/www/jaw_sim/
+    - assets/www/jaw_sim/assets/
+    - assets/www/jaw_sim/draco/
   #   - images/a_dot_ham.jpeg
 
   # An image asset can refer to one or more resolution-specific "variants", see
